@@ -202,7 +202,7 @@ for (s in state_codes) {
   output_geoms <- st_sfc(lapply(seq_len(n_target), function(i) {
     if (!is.null(cells[[i]])) return(cells[[i]])
     # rare fallback: isolated seed never claimed area — tiny disk at seed
-    st_buffer(st_point(P[i, ]), 0.1 * cs)
+    st_buffer(st_sfc(st_point(P[i, ]), crs = 4326), 0.1 * cs)[[1]]
   }), crs = 4326)
   results[[s]] <- st_sf(
     region     = state_muns$region,
