@@ -97,10 +97,21 @@ out <- lapply(sort(unique(hex$state_code)), function(s) {
              eq_p95 = round(quantile(r_eq, .95), 2),
              tg_p5 = round(quantile(r_tg, .05), 2),
              tg_p95 = round(quantile(r_tg, .95), 2),
+             pairs = tot,
              cohesion = round(100 * pres / max(tot, 1)),
+             pres_n = pres,
              iq = round(mean(iq, na.rm = TRUE), 2))
 })
 out_df <- do.call(rbind, out)
-print(out_df, row.names = FALSE)
-cat("\nNational cohesion (weighted by pairs):",
+print(out_df[, setdiff(names(out_df), "pres_n")], row.names = FALSE)
+
+# National cohesion, two ways. The pair-weighted figure is the real one: it is
+# the fraction of ALL true intra-state municipio adjacencies that survive as
+# touching cells. The cell-weighted figure is retained only for comparability
+# with the v8.3-v8.5 commit messages, which quoted it while labelling it
+# "weighted by pairs" -- dense states carry more pairs per cell, so it reads
+# optimistically.
+cat("\nNational cohesion (pair-weighted, exact):",
+    round(100 * sum(out_df$pres_n) / sum(out_df$pairs), 1), "%\n")
+cat("National cohesion (cell-weighted, legacy):",
     round(sum(out_df$cohesion * out_df$n) / sum(out_df$n), 1), "%\n")
