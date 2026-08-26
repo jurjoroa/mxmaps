@@ -84,7 +84,7 @@ p <- mk_panel(hex_v7, real, c(-118.5, -86.5), c(14, 32.8),
      mk_panel(real, real, c(-118.5, -86.5), c(14, 32.8),
               "True municipio territory", show_real = TRUE) +
   plot_annotation(
-    title = "Mexico — v8.3 anchored weighted hex cartogram vs true territory",
+    title = "Mexico — v8.5 equal-area municipio cartogram vs true territory",
     subtitle = "Share of population speaking an indigenous language, 2020 census",
     theme = theme(plot.title = element_text(face = "bold", size = 18),
                   plot.subtitle = element_text(color = "grey40", size = 12)))
@@ -103,14 +103,14 @@ for (s in sort(unique(mxmun_sf$state_code))) {
   ab <- state_lookup$state_abbr[state_lookup$state_code == s][1]
 
   p7 <- mk_panel(hex_v7 |> filter(state_code == s), NULL, xlim, ylim,
-                 "v8.3 — anchored weighted cartogram", show_real = FALSE)
+                 "v8.5 — equal-area + cohesion", show_real = FALSE)
   real_s <- real |> filter(state_code == s)
   pr <- mk_panel(real_s, real_s, xlim, ylim,
                  "True territory", show_real = TRUE)
   p <- p7 + pr + plot_layout(guides = "collect") +
     plot_annotation(
       title = sprintf("%s (%s) — distortion check", nm, ab),
-      subtitle = "v8.3 anchored weighted hex cartogram vs true municipio territory",
+      subtitle = "v8.5 equal-area municipio cartogram vs true municipio territory",
       theme = theme(plot.title = element_text(face = "bold", size = 18),
                     plot.subtitle = element_text(color = "grey40", size = 12)))
   fname <- sprintf("state_pages/real_v85_%s_%s.png", s, ab)
