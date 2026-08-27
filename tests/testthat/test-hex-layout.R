@@ -72,7 +72,14 @@ read_hex <- function(file_name) {
 true_municipios <- function() {
   if (!is.null(.cache$mx)) return(.cache$mx)
   skip_if_not_installed("mxmaps")
-  df <- get("mxmunicipio.map", envir = asNamespace("mxmaps"))
+  df <- local({
+    # mxmunicipio.map is LAZY-loaded, so it is not in the namespace directly;
+    # asNamespace() finds it only if the package happens to be attached. Use
+    # utils::data(), which works in a clean session and under R CMD check.
+    e <- new.env()
+    utils::data("mxmunicipio.map", package = "mxmaps", envir = e)
+    get("mxmunicipio.map", envir = e)
+  })
   regions <- unique(df$region)
   polys <- lapply(regions, function(r) {
     sub <- df[df$region == r, ]
