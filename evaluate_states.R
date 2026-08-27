@@ -61,12 +61,29 @@ pos_nat <- match(hex$region, mxmun_sf$region)
 tcn <- st_coordinates(st_centroid(st_transform(mxmun_sf, 6372),
                                   of_largest_polygon = TRUE))
 
+state_km <- true_km2 |>
+  dplyr::mutate(state_code = substr(region, 1, 2)) |>
+  dplyr::group_by(state_code) |>
+  dplyr::summarise(state_km2 = sum(true_km2), n = dplyr::n(), .groups = "drop") |>
+  dplyr::mutate(cs_km = sqrt(state_km2 / n / 0.866))
+cs_nat <- sqrt(sum(state_km$state_km2) / sum(state_km$n) / 0.866)
+gam_tab <- state_km |>
+  dplyr::mutate(gamma_auto = pmax(pmin(0.18 * (cs_km / cs_nat - 0.75), 0.45), 0))
+
 out <- lapply(sort(unique(hex$state_code)), function(s) {
   idx <- which(hex$state_code == s)
   n <- length(idx)
   share_s <- sum(areas[idx]) / n
   r_eq <- areas[idx] / share_s
-  r_tg <- areas[idx] / (sum(areas[idx]) * tkm[idx]^0.35 / sum(tkm[idx]^0.35))
+  # The area-vs-target reference used to hardcode gamma = 0.35, but the
+  # generators set gamma PER STATE (the derived rule plus, historically, 12
+  # hand overrides), so for 31 of 32 states this column was scoring against a
+  # gamma the layout never used. Derive the same per-state rule here. This
+  # still cannot see the 12 hand overrides -- the real fix is for generators to
+  # ship their targets alongside the artifact.
+  gam_s <- gam_tab$gamma_auto[match(s, gam_tab$state_code)]
+  if (is.na(gam_s)) gam_s <- 0.35
+  r_tg <- areas[idx] / (sum(areas[idx]) * tkm[idx]^gam_s / sum(tkm[idx]^gam_s))
   dx <- pos[idx, 1] - tcn[pos_nat[idx], 1]
   dy <- pos[idx, 2] - tcn[pos_nat[idx], 2]
   disp <- sqrt(dx^2 + dy^2) / 1000
@@ -97,6 +114,8 @@ out <- lapply(sort(unique(hex$state_code)), function(s) {
              eq_p95 = round(quantile(r_eq, .95), 2),
              tg_p5 = round(quantile(r_tg, .05), 2),
              tg_p95 = round(quantile(r_tg, .95), 2),
+             eq_min = round(min(r_eq), 3),
+             n_tiny = sum(r_eq < 0.25),
              pairs = tot,
              cohesion = round(100 * pres / max(tot, 1)),
              pres_n = pres,
@@ -115,3 +134,17 @@ cat("\nNational cohesion (pair-weighted, exact):",
     round(100 * sum(out_df$pres_n) / sum(out_df$pairs), 1), "%\n")
 cat("National cohesion (cell-weighted, legacy):",
     round(sum(out_df$cohesion * out_df$n) / sum(out_df$n), 1), "%\n")
+
+# LEGIBILITY TAIL. The p5/p95 area-ratio columns cannot see a handful of
+# near-invisible cells, and a version can buy cohesion by creating them --
+# which is exactly what v8.8 did (38 cells under 0.25x their state mean against
+# 2 for v8.6). A municipio rendered at 1/10 of its state's mean cell area is
+# not legible, and legibility is the entire point of the layout, so this is a
+# first-class number and not a footnote.
+cat(sprintf("Legibility tail: %d cells < 0.25x their state mean, %d < 0.10x, smallest %.4fx\n",
+            sum(out_df$n_tiny),
+            sum(vapply(sort(unique(hex$state_code)), function(s) {
+              idx <- which(hex$state_code == s)
+              a <- areas[idx]; sum(a / mean(a) < 0.10)
+            }, 0L)),
+            min(out_df$eq_min)))
