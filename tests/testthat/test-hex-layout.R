@@ -174,7 +174,13 @@ cohesion_at <- function(g, pairs, dist_m) {
   mean(mapply(function(i, j) j %in% nb[[i]], pairs$i, pairs$j))
 }
 
-canonical <- "mxmunicipio_hex_sf_v8_8.rds"
+# The artifact the artifact-level invariants are asserted against. This pointed
+# at v8_8 for three versions after v8_8 stopped being the canonical layout, so
+# "run the tests before shipping an artifact" was checking a superseded file --
+# the one that renders 38 cells under a quarter of their state mean and 8
+# fabricated placeholder discs, including Ecatepec (pop 1.65M) at 1.40 km2
+# against its true 157.8 km2. A guard aimed at the wrong artifact is not a guard.
+canonical <- "mxmunicipio_hex_sf_v11_3.rds"
 
 n_municipios <- 2469L
 
@@ -192,10 +198,12 @@ n_municipios <- 2469L
 known_artifacts <- data.frame(
   file = c("mxmunicipio_hex_sf_v8_5.rds", "mxmunicipio_hex_sf_v8_6.rds",
            "mxmunicipio_hex_sf_v8_8.rds", "mxmunicipio_hex_sf_v11.rds",
-           "mxmunicipio_hex_sf_v12.rds"),
-  max_invalid = c(23L, 1L, 0L, 0L, 0L),
-  # measured: 0.03325, 3.885e-04, 0.007773, 0.4417, 0.002124
-  min_rel_area = c(0.03, 3e-4, 5e-3, 0.4, 2e-3),
+           "mxmunicipio_hex_sf_v12.rds", "mxmunicipio_hex_sf_v11_2.rds",
+           "mxmunicipio_hex_sf_v11_3.rds"),
+  max_invalid = c(23L, 1L, 0L, 0L, 0L, 0L, 0L),
+  # measured: 0.03325, 3.885e-04, 0.007773, 0.4417, 0.002124, 0.449362,
+  #           0.450817
+  min_rel_area = c(0.03, 3e-4, 5e-3, 0.4, 2e-3, 0.44, 0.45),
   stringsAsFactors = FALSE
 )
 
