@@ -80,8 +80,25 @@ r_eq <- unsplit(lapply(split(a_lay, lay$state_code), function(z) z / mean(z)),
                 lay$state_code)
 n_tiny <- sum(r_eq < 0.25)
 eq_min <- min(r_eq)
-miss_pct <- 100 * max((tru_state[names(cov_state)] - cov_state) /
-                        tru_state[names(cov_state)])
+# COVERAGE IS GEOMETRIC, NOT AN AREA SUM. This tile used to report
+#   max_state (true_area - sum(cell_area)) / true_area
+# which is the OT solver's area residual, and it cannot see an uncovered hole:
+# a v11.3 build with KNN=60 left 3816.9 ppm of Chiapas covered by no cell at all
+# and this number read 0.02% before and after the fix. Measure the thing the
+# hard constraint actually names -- the part of the real state polygon that no
+# cell covers -- with st_difference. poly_area() is unnecessary here because
+# everything is already projected to 6372.
+gap_ppm <- max(vapply(sort(unique(lay$state_code)), function(s) {
+  sp <- st_make_valid(st_union(real6$geometry[real$state_code == s]))
+  cl <- st_make_valid(st_union(st_make_valid(lay6$geometry[lay$state_code == s])))
+  d <- suppressWarnings(st_difference(sp, cl))
+  if (length(d) == 0) return(0)
+  1e6 * sum(as.numeric(st_area(d))) / sum(as.numeric(st_area(sp)))
+}, 0))
+# kept as a separate diagnostic: the solver's per-state area residual, which is
+# a real number about convergence but is NOT a statement about coverage
+area_res_pct <- 100 * max((tru_state[names(cov_state)] - cov_state) /
+                            tru_state[names(cov_state)])
 
 ov <- suppressWarnings(st_intersection(lay6, lay6))
 ov <- ov[ov$region != ov$region.1, ]
@@ -111,8 +128,8 @@ ct <- st_coordinates(st_centroid(real6, of_largest_polygon = TRUE))[, 1:2, drop 
 disp_km <- sqrt(rowSums((cl - ct[match(lay$region, real$region), ])^2)) / 1000
 
 cat(sprintf(paste0("MEASURED %s: cohesion %.1f%% | disp %.0f km | n_tiny %d | ",
-                   "eq_min %.3f | overlap %.1f ppm | missing %.2f%%\n"),
-            TAG, cohesion, mean(disp_km), n_tiny, eq_min, ov_ppm, miss_pct))
+                   "eq_min %.3f | overlap %.1f ppm | uncovered %.1f ppm\n"),
+            TAG, cohesion, mean(disp_km), n_tiny, eq_min, ov_ppm, gap_ppm))
 
 # ---- panels ---------------------------------------------------------------
 fill_scale <- function()
@@ -146,13 +163,13 @@ pan <- function(d, fv, xlim, ylim, title, is_real, lw = 0.07) {
 tiles <- data.frame(
   x = 1:6,
   label = c("Cohesion", "Mean displacement", "Illegible cells",
-            "Smallest cell", "Cell overlap", "Territory missing"),
+            "Smallest cell", "Cell overlap", "Territory uncovered"),
   value = c(sprintf("%.1f%%", cohesion), sprintf("%.0f km", mean(disp_km)),
             sprintf("%d", n_tiny), sprintf("%.2f×", eq_min),
-            sprintf("%.1f ppm", ov_ppm), sprintf("%.2f%%", miss_pct)),
+            sprintf("%.1f ppm", ov_ppm), sprintf("%.1f ppm", gap_ppm)),
   note = c("of true adjacencies kept", "cell centroid vs municipio",
            "under 0.25× state mean", "relative to state mean",
-           "of national area", "vs real state polygons"),
+           "of national area", "of state area, no cell covers it"),
   stringsAsFactors = FALSE)
 
 strip <- ggplot(tiles, aes(x = x)) +
@@ -188,6 +205,8 @@ p <- (top / strip) + plot_layout(heights = c(1, 0.20)) +
                                    margin = margin(b = 6)),
       plot.caption = element_text(colour = INK_MUTE, size = 9, hjust = 0,
                                   margin = margin(t = 6))))
+cat(sprintf("coverage: worst state gap %.1f ppm | solver area residual %.3f%%\n",
+            gap_ppm, area_res_pct))
 fn <- sprintf("state_pages/FINAL_%s_national.png", TAG)
 ggsave(fn, p, width = 19, height = 10, dpi = 150, bg = "white")
 cat("Wrote", fn, "\n")
