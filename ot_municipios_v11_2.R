@@ -43,6 +43,9 @@
 #
 # Usage:   Rscript ot_municipios_v11.R [state_code ...]
 #          V11_GAMMA=<g>  override the per-state gamma with one global value
+#          V11_GAMMA_TAB=<csv>  per-state gamma from state_code,gamma
+#          V11_OUT=<path>       write here instead of the default
+#          V11_SITES=<csv>      site positions from region,lon,lat
 # Output:  data/mxmunicipio_hex_sf_v11.rds  (all states) or /tmp/v11_2_states.rds
 # ---------------------------------------------------------------------------
 
@@ -60,6 +63,26 @@ KNN     <- as.integer(.env("V11_KNN", 40))   # sites each cell is clipped agains
 MAXIT   <- as.integer(.env("V11_MAXIT", 250))
 DEBUG   <- nzchar(Sys.getenv("V11_DEBUG"))
 TOL     <- .env("V11_TOL", 0.01)             # stop at max |A/T - 1| < TOL
+# V11_OUT lets a caller name the output file. The default path is a FIXED
+# /tmp/v11_2_states.rds, so two runs of this engine at once silently race on it
+# and a sweep can cache a layout under the wrong gamma. Needed to run states in
+# parallel at all -- gamma_frontier.R had to take a lock instead.
+OUTPATH   <- { v <- Sys.getenv("V11_OUT");       if (nzchar(v)) v else NA_character_ }
+# V11_GAMMA_TAB supplies per-state gamma from a csv (state_code,gamma), so the
+# frontier sweep and the shipped generator can read ONE source of truth instead
+# of the rule being transcribed in both. V11_GAMMA (a single global value) still
+# wins over the table, which still wins over the derived rule + hand overrides.
+GAMMA_TAB <- { v <- Sys.getenv("V11_GAMMA_TAB"); if (nzchar(v)) v else NA_character_ }
+# V11_SITES supplies site positions from a csv (region,lon,lat), overriding the
+# true-centroid pin for the regions it names. The pin is what makes v11 work --
+# a power diagram's adjacency is the dual of a weighted Delaunay of its sites,
+# and the true centroids already carry 83.1% of real adjacency, which v8 threw
+# away by moving sites to equalise areas. But Aurenhammer-Hoffmann-Aronov says
+# weights alone achieve ANY target areas for ANY distinct sites, so moving a
+# site costs nothing in area accuracy -- only in displacement. That makes a
+# BOUNDED, adjacency-directed site move a free parameter the engine never
+# exposed. The leash belongs to the caller, not here.
+SITES     <- { v <- Sys.getenv("V11_SITES");      if (nzchar(v)) v else NA_character_ }
 
 # ---- source polygons (same construction as the v3-v8 line) ----------------
 data("mxmunicipio.map")
@@ -102,6 +125,17 @@ gamma_override <- c("02"=0.35,"03"=0.45,"05"=0.30,"08"=0.30,"26"=0.25,
                     "09"=0.10,"06"=0.12)
 state_areas$gamma[match(names(gamma_override), state_areas$state_code)] <-
   gamma_override
+if (!is.na(GAMMA_TAB)) {
+  if (!file.exists(GAMMA_TAB)) stop("V11_GAMMA_TAB not found: ", GAMMA_TAB)
+  gt <- utils::read.csv(GAMMA_TAB, colClasses = c(state_code = "character"))
+  if (!all(c("state_code", "gamma") %in% names(gt)))
+    stop("V11_GAMMA_TAB needs columns state_code,gamma")
+  m  <- match(gt$state_code, state_areas$state_code)
+  ok <- !is.na(m)
+  state_areas$gamma[m[ok]] <- gt$gamma[ok]
+  cat(sprintf("gamma table: %s -> %d/%d state(s) overridden\n",
+              GAMMA_TAB, sum(ok), nrow(gt)))
+}
 
 state_sf <- mxmun_sf |>
   group_by(state_code) |>
@@ -245,6 +279,18 @@ for (s in state_codes) {
          st_centroid(st_transform(muns, 6372), of_largest_polygon = TRUE),
          4326))[, 1:2, drop = FALSE]
   # nudge any duplicate sites apart (power diagram needs distinct sites)
+  if (!is.na(SITES)) {
+    if (!file.exists(SITES)) stop("V11_SITES not found: ", SITES)
+    sv <- utils::read.csv(SITES, colClasses = c(region = "character"))
+    if (!all(c("region", "lon", "lat") %in% names(sv)))
+      stop("V11_SITES needs columns region,lon,lat")
+    m <- match(muns$region, sv$region)
+    ok <- !is.na(m)
+    if (any(ok)) {
+      P[ok, 1] <- sv$lon[m[ok]]
+      P[ok, 2] <- sv$lat[m[ok]]
+    }
+  }
   dup <- duplicated(round(P, 10))
   if (any(dup)) P[dup, ] <- P[dup, ] + 1e-7
 
@@ -496,10 +542,8 @@ for (s in state_codes) {
 
 out <- do.call(rbind, results[!vapply(results, is.null, TRUE)])
 out <- out[order(out$region), ]
-if (is.null(ONLY)) {
-  saveRDS(out, "data/mxmunicipio_hex_sf_v11_2.rds")
-  cat(sprintf("Saved data/mxmunicipio_hex_sf_v11_2.rds (%d cells)\n", nrow(out)))
-} else {
-  saveRDS(out, "/tmp/v11_2_states.rds")
-  cat(sprintf("Saved /tmp/v11_2_states.rds (%d cells)\n", nrow(out)))
-}
+dest <- if (!is.na(OUTPATH)) OUTPATH else
+        if (is.null(ONLY)) "data/mxmunicipio_hex_sf_v11_2.rds" else
+        "/tmp/v11_2_states.rds"
+saveRDS(out, dest)
+cat(sprintf("Saved %s (%d cells)\n", dest, nrow(out)))
