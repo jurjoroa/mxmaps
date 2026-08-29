@@ -253,6 +253,17 @@ build_pd <- function(P, w, knn, sq, state_clip) {
   list(cells = cells, ar = ar, faces = faces)
 }
 
+# V11_LIB=1 makes this file SOURCEABLE: it defines build_pd(), clip_lab() and
+# the per-state setup data, then returns before the solve loop. A site-position
+# search needs hundreds of solves, and every process launch costs ~165s of setup
+# for under a second of solving, so the search has to run in one session -- but
+# re-implementing build_pd() in the searcher is exactly the copy-paste that put
+# the polygon builder in 52 scripts and largest_piece() in 11 places. Source it
+# instead.
+if (nzchar(Sys.getenv("V11_LIB"))) {
+  message("ot_municipios_v11_2.R loaded as a library (V11_LIB set)")
+} else {
+
 state_codes <- sort(unique(mxmun_sf$state_code))
 if (!is.null(ONLY)) state_codes <- intersect(state_codes, ONLY)
 results <- vector("list", length(state_codes)); names(results) <- state_codes
@@ -547,3 +558,5 @@ dest <- if (!is.na(OUTPATH)) OUTPATH else
         "/tmp/v11_2_states.rds"
 saveRDS(out, dest)
 cat(sprintf("Saved %s (%d cells)\n", dest, nrow(out)))
+
+}  # end of !V11_LIB solve block
