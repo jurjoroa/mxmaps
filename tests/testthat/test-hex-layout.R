@@ -281,34 +281,33 @@ for (row_i in seq_len(nrow(known_artifacts))) {
 
 # ---- geometric invariants, canonical artifact ------------------------
 
-test_that("v8_8 cells do not overlap beyond the measured tolerance", {
+test_that("canonical cells do not overlap beyond the measured tolerance", {
   skip_on_cran()
   hex <- read_hex(canonical)
   m <- hex_metric(hex)
   ov <- overlap_table(m$g, m$area_km2)
 
-  # Invariant 3, at its REAL measured tolerance. The ideal ("no cell
-  # overlaps another") is false: 3522 pairs overlap. The distribution is
-  # what matters and it is bimodal: numerical slivers plus a dozen real
-  # collisions.
-  expect_lt(sum(ov$km2) / sum(m$area_km2), 2e-4)   # measured 6.84e-05
-  expect_lt(median(ov$frac), 1e-6)                 # measured 2.48e-14
-  expect_lte(sum(ov$frac > 1e-3), 20L)             # measured 12 pairs
-  # KNOWN DEFECT, pinned so it cannot get worse: the worst pair is
-  # 21083 / 29031, where 75.3% of the smaller cell is covered by its
-  # neighbour. Others above 20%: 15017/17007, 21016/21172,
-  # 21172/29034, 21192/21194, 15017/15063, 21083/29047.
-  expect_lte(max(ov$frac), 0.85)                   # measured 0.7526
+  # Invariant 3. Cells still touch numerically -- 3811 pairs share a sliver of
+  # area at floating-point scale -- but the REAL collisions are gone. The
+  # v8_8-era defect this used to pin (pair 21083/29031, 75.3% of the smaller
+  # cell covered, plus six more above 20%) does not exist in the canonical
+  # artifact: the worst pair is 7e-04 and NO pair exceeds 1e-3. Bounds are the
+  # v11_3 measurements plus a small multiple; they may only ever move DOWN.
+  expect_lt(sum(ov$km2) / sum(m$area_km2), 2e-6)   # measured 4.813e-07
+  expect_lt(median(ov$frac), 1e-12)                # measured 2.462e-14
+  expect_identical(sum(ov$frac > 1e-3), 0L)        # measured 0 pairs
+  expect_lt(max(ov$frac), 5e-3)                    # measured 7.0e-04
 })
 
-test_that("v8_8 keeps every cell inside its own state polygon", {
+test_that("canonical keeps every cell inside its own state polygon", {
   skip_on_cran()
   hex <- read_hex(canonical)
   m <- hex_metric(hex)
   st <- state_outlines()
 
-  # Invariant 4. Measured worst state 21 (Puebla): 1.26e-04 of the
-  # state's area spills outside; national 6.92e-06.
+  # Invariant 4. Measured on v11_3: worst state spills 7.50e-06 of its own
+  # area, national 1.07e-06 -- two orders tighter than the v8_8 figures this
+  # used to pin (1.26e-04 worst, 6.92e-06 national).
   out_frac <- vapply(st$codes, function(sc) {
     cells <- st_union(m$g[hex$state_code == sc])
     outside <- st_difference(cells, st$full[[sc]])
@@ -316,29 +315,28 @@ test_that("v8_8 keeps every cell inside its own state polygon", {
     num / as.numeric(st_area(st$full[[sc]]))
   }, numeric(1))
 
-  expect_lt(max(out_frac), 1e-3)
+  expect_lt(max(out_frac), 5e-5)                   # measured 7.502e-06
   expect_lt(sum(out_frac * vapply(st$codes, function(sc)
     as.numeric(st_area(st$full[[sc]])), numeric(1))) /
       sum(vapply(st$codes, function(sc)
-        as.numeric(st_area(st$full[[sc]])), numeric(1))), 1e-4)
+        as.numeric(st_area(st$full[[sc]])), numeric(1))), 5e-6)  # 1.065e-06
 })
 
-test_that("v8_8 cells cover each state's real mainland outline", {
+test_that("canonical covers each state's real outline, islands included", {
   skip_on_cran()
   hex <- read_hex(canonical)
   m <- hex_metric(hex)
   st <- state_outlines()
 
   # Invariant 5, the project's hard "real outline preserved" constraint.
-  # Measured against the state's largest connected part: worst state 14
-  # (Jalisco) 1.05%, median 9.13e-05, national 9.72e-04.
-  # Against the WHOLE polygon the miss is larger and is entirely
-  # offshore islands: state 23 misses 891.7 km2 in 2 pieces that are
-  # exactly Cozumel (475.8) and Isla Mujeres (45.6); state 02 misses
-  # Cedros (926.1) and Angel de la Guarda (350.3); state 03 is 13 parts
-  # of which 12 are uncovered islands. No cell is ever placed on an
-  # island, so the island bound is stated separately rather than folded
-  # into a single fudged tolerance.
+  # THE ISLAND DEFECT IS CURED, and these bounds now say so. Under v8_8 the
+  # whole-polygon miss was 2.0e-02 and entirely offshore: state 23 lost Cozumel
+  # (475.8 km2) and Isla Mujeres (45.6), state 02 lost Cedros (926.1) and Angel
+  # de la Guarda (350.3), state 03 had 12 of its 13 parts uncovered. The v11.1
+  # fix -- a largest_piece() call at OUTPUT was discarding island fragments --
+  # removed all of it. Mainland and whole-polygon figures now agree to three
+  # significant figures because there is no island gap left to separate them.
+  # Holding the old 0.03 tolerance would let every island vanish again unseen.
   areas <- vapply(st$codes, function(sc)
     as.numeric(st_area(st$main[[sc]])), numeric(1))
   unc <- vapply(st$codes, function(sc) {
@@ -347,9 +345,9 @@ test_that("v8_8 cells cover each state's real mainland outline", {
     if (length(gap) == 0) 0 else as.numeric(st_area(gap))
   }, numeric(1))
 
-  expect_lt(max(unc / areas), 0.03)            # measured 0.01048 (14)
-  expect_lt(median(unc / areas), 1e-3)         # measured 9.13e-05
-  expect_lt(sum(unc) / sum(areas), 5e-3)       # measured 9.72e-04
+  expect_lt(max(unc / areas), 5e-5)            # measured 9.100e-06 (26)
+  expect_lt(median(unc / areas), 2e-6)         # measured 2.463e-07
+  expect_lt(sum(unc) / sum(areas), 1e-5)       # measured 1.820e-06
 
   areas_full <- vapply(st$codes, function(sc)
     as.numeric(st_area(st$full[[sc]])), numeric(1))
@@ -358,13 +356,13 @@ test_that("v8_8 cells cover each state's real mainland outline", {
     gap <- st_difference(st$full[[sc]], cells)
     if (length(gap) == 0) 0 else as.numeric(st_area(gap))
   }, numeric(1))
-  expect_lt(max(unc_full / areas_full), 0.03)  # measured 0.02005 (23)
-  expect_lt(sum(unc_full) / sum(areas_full), 6e-3)  # measured 3.04e-03
+  expect_lt(max(unc_full / areas_full), 5e-5)  # measured 9.038e-06 (26)
+  expect_lt(sum(unc_full) / sum(areas_full), 1e-5)  # measured 1.818e-06
 })
 
 # ---- the assignment is the right assignment -------------------------
 
-test_that("v8_8 assignment is not a permutation of the cells", {
+test_that("canonical assignment is not a permutation of the cells", {
   skip_on_cran()
   hex <- read_hex(canonical)
   skip_if_not_installed("mxmaps")
@@ -395,15 +393,17 @@ test_that("v8_8 assignment is not a permutation of the cells", {
   }
   disp_perm_km <- sqrt(rowSums((cell_xy[perm, ] - true_xy)^2)) / 1000
 
-  expect_lt(mean(disp_km), 40)          # measured 22.2 km
-  expect_lt(median(disp_km), 30)        # measured 17.2 km
-  # Measured ratio 0.163: the real assignment is 6x better than a
-  # within-state shuffle. Anything above 0.5 means the mapping has been
-  # scrambled.
-  expect_lt(mean(disp_km) / mean(disp_perm_km), 0.5)
+  # Displacement is the one term allowed to move between versions -- the pair
+  # repair moves sites deliberately -- so headroom here is wider than on the
+  # geometric invariants, but not 2x wider.
+  expect_lt(mean(disp_km), 30)          # measured 24.75 km
+  expect_lt(median(disp_km), 24)        # measured 18.61 km
+  # Measured ratio 0.179: the real assignment is 5.6x better than a
+  # within-state shuffle. Approaching 0.30 means it has been scrambled.
+  expect_lt(mean(disp_km) / mean(disp_perm_km), 0.30)
 })
 
-test_that("v8_8 cohesion is measured from geometry, not from centres", {
+test_that("canonical cohesion is measured from geometry, not from centres", {
   skip_on_cran()
   hex <- read_hex(canonical)
   skip_if_not_installed("mxmaps")
@@ -415,8 +415,12 @@ test_that("v8_8 cohesion is measured from geometry, not from centres", {
   # optimiser improved a number that was not cohesion. A floor on
   # geometry-derived cohesion is what would have caught that: the score
   # can only be reported as improved if the real adjacency improved.
+  # THE LOAD-BEARING GUARD. This floor sat at 0.74 -- a v8_8 measurement left
+  # behind when canonical moved to v11_3 -- against an actual 0.8290, so the
+  # suite permitted an 8.9 pp regression: twice the whole v11.2 -> v11.3 gain
+  # (+4.39 pp), and enough to accept a silent revert to v11.2 (0.7851).
   coh <- cohesion_at(m$g, pairs, adj_snap_m)
-  expect_gt(coh, 0.74)                  # measured 0.7801
+  expect_gt(coh, 0.82)                  # measured 0.8290
 
   # BUG: a site-distance proxy stood in for the true cell adjacency.
   # Two guards. First, the geometric number must be a PLATEAU in the
