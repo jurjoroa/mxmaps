@@ -13,12 +13,19 @@
 #          91.4% -- it stops being the worst state. So a version that "improves
 #          cohesion" may only have been handed easier pairs.
 #
-#          pct_ceil is the honest per-state number: a single tessellation cell
-#          gets ~6 usable faces, so a municipio with 22 true neighbours cannot
-#          keep more than 6 of them. The k = 6 pair ceiling is
-#          0.5 * sum(min(deg, 6)) = 90.5% nationally. pct_ceil reports how much
-#          of a state's OWN reachable ceiling the layout achieved, which is
-#          comparable across states in a way raw cohesion is not.
+#          pct_ceil normalises each state by its own degree structure, which is
+#          what makes states comparable when raw cohesion is not. But it is a
+#          BUDGET, NOT A BOUND, and the difference matters: measured on v11.3,
+#          168 municipios (182 in the repaired candidate) keep MORE than
+#          min(deg, 6) neighbours, 436 cells (17.7%) have more than 6 same-state
+#          faces, and the maximum is 10. The premise "a cell gets ~6 usable
+#          faces" is false. The budget is not saturated either -- 5213 kept
+#          against 5690 -- because it errs in both directions: degree 9+
+#          municipios beat their cap (mean 6.54 and 7.00 against 6.00) while the
+#          884 degree-5-6 municipios fall 0.79 SHORT of theirs. That shortfall,
+#          roughly 175 pairs in ordinary municipios with no geometric excuse, is
+#          where the addressable loss actually sits. Do not read pct_ceil as
+#          progress-to-done.
 #
 #          Usage: Rscript evaluate_states.R <rds_path>
 #
@@ -54,6 +61,8 @@ if (!file.exists(meta_f))
   stop("missing ", meta_f, " -- run: Rscript pair_metadata.R")
 pm <- readRDS(meta_f)
 mm <- readRDS("data/true_mun_meta.rds")
+cx_f <- "data/true_pairs_cross.rds"
+cx <- if (file.exists(cx_f)) readRDS(cx_f) else NULL
 
 true_km2 <- mxmun_sf |>
   st_transform(MX_CRS) |>
@@ -81,6 +90,41 @@ has_both <- !is.na(pa) & !is.na(pb)
 pm$surv <- NA
 pm$surv[has_both] <- mapply(function(x, y) y %in% inter[[x]],
                             pa[has_both], pb[has_both])
+
+# ---- THE SEAM. Every optimiser in this project works one state at a time and
+# the pair cache was intra-state by construction, so nothing here could see what
+# happens where two states meet. Measured on v11.3: less than half of the true
+# cross-state adjacencies survive, against 83% of the intra-state ones. A reader
+# at a state line is being shown neighbours that are not neighbours, and until
+# now no shipped number reported it.
+seam <- NULL
+if (!is.null(cx)) {
+  ca <- h_of[cx$i]
+  cb <- h_of[cx$j]
+  okc <- !is.na(ca) & !is.na(cb)
+  cx$surv <- NA
+  cx$surv[okc] <- mapply(function(x, y) y %in% inter[[x]], ca[okc], cb[okc])
+  true_key <- paste(pmin(cx$i, cx$j), pmax(cx$i, cx$j))
+  m_of <- match(hex$region, mxmun_sf$region)
+  n_touch <- 0L
+  n_true <- 0L
+  for (a in seq_len(nrow(hex))) {
+    bs <- inter[[a]]
+    bs <- bs[bs > a]
+    if (!length(bs)) next
+    ia <- m_of[a]
+    ib <- m_of[bs]
+    sel <- mxmun_sf$state_code[ia] != mxmun_sf$state_code[ib]
+    if (!any(sel)) next
+    kk <- paste(pmin(ia, ib[sel]), pmax(ia, ib[sel]))
+    n_touch <- n_touch + length(kk)
+    n_true <- n_true + sum(kk %in% true_key)
+  }
+  seam <- list(recall = mean(cx$surv, na.rm = TRUE), n = sum(!is.na(cx$surv)),
+               kept = sum(cx$surv, na.rm = TRUE),
+               touch = n_touch, true_touch = n_true,
+               precision = if (n_touch > 0) n_true / n_touch else NA_real_)
+}
 
 gam_tab <- state_size_table(mxmun_sf)$per_state
 
@@ -165,9 +209,18 @@ cat(sprintf("\nNational cohesion (pair-weighted, exact): %.1f %% (%d/%d)\n",
             100 * mean(pv$surv), sum(pv$surv), nrow(pv)))
 cat(sprintf("National cohesion (cell-weighted, legacy): %.1f %%\n",
             sum(out_df$cohesion * out_df$n) / sum(out_df$n)))
-cat(sprintf("National k=6 ceiling: %.1f %% | achieved %.1f %% of it\n",
+cat(sprintf("National k=6 BUDGET (not a bound): %.1f %% | at %.1f %% of it\n",
             100 * sum(out_df$cap6) / nrow(pv),
             100 * sum(out_df$pres_n) / sum(out_df$cap6)))
+
+if (!is.null(seam)) {
+  cat(sprintf("\n-- the seam: cross-state adjacency (%d true pairs) --\n", seam$n))
+  cat(sprintf("  recall    %.1f %% (%d/%d kept)   vs %.1f %% intra-state\n",
+              100 * seam$recall, seam$kept, seam$n, 100 * mean(pv$surv)))
+  cat(sprintf("  precision %.1f %% (%d of %d touching cross-state cell pairs are real)\n",
+              100 * seam$precision, seam$true_touch, seam$touch))
+  cat(sprintf("  fabricated cross-state contacts: %d\n", seam$touch - seam$true_touch))
+}
 
 cat("\n-- national cohesion by endpoint degree --\n")
 print(pv |>
