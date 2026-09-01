@@ -31,6 +31,7 @@
 #
 # Usage:   Rscript pair_metadata.R
 # Output:  data/true_pairs_meta.rds   one row per intra-state adjacency pair
+#          data/true_pairs_cross.rds  one row per CROSS-state adjacency pair
 #          data/true_mun_meta.rds     one row per municipio
 # ---------------------------------------------------------------------------
 
@@ -98,11 +99,57 @@ pairs_df$border_q <- as.integer(cut(
   breaks = quantile(pairs_df$border_km, probs = seq(0, 1, 0.2)),
   include.lowest = TRUE, labels = FALSE))
 
+# ---- CROSS-STATE pairs -----------------------------------------------------
+# The seam is a measurement hole, not a modelling choice. Every optimiser in
+# this repo works one state at a time, and this cache was intra-state by
+# construction, so nothing could see what happens where two states meet.
+# Measured on v11.3: 49.4% of true cross-state adjacencies survive against
+# 82.9% of intra-state ones -- a 33.5 pp gap -- plus fabricated seam contacts
+# where cells touch and municipios do not. A reader at a state line is shown
+# neighbours that are not neighbours, and no shipped metric reports it.
+cross_df <- do.call(rbind, lapply(seq_len(n), function(i) {
+  js <- adj[[i]]
+  js <- js[js > i & mx$state_code[js] != mx$state_code[i]]
+  if (length(js) == 0) return(NULL)
+  data.frame(i = i, j = js)
+}))
+cat(sprintf("cross-state adjacency pairs: %d\n", nrow(cross_df)))
+
+cross_shared_m <- vapply(seq_len(nrow(cross_df)), function(k) {
+  g <- suppressWarnings(
+    st_intersection(mx_m$geometry[cross_df$i[k]], mx_m$geometry[cross_df$j[k]]))
+  if (length(g) == 0) return(0)
+  ln <- suppressWarnings(tryCatch(
+    st_collection_extract(g, "LINESTRING"), error = function(e) NULL))
+  if (is.null(ln) || length(ln) == 0) return(0)
+  sum(as.numeric(st_length(ln)))
+}, 0)
+
+# Degree here is TOTAL (both sides of the seam), because a seam pair competes
+# for faces against a municipio's intra-state neighbours too.
+deg_total <- tabulate(c(pairs_df$i, pairs_df$j, cross_df$i, cross_df$j),
+                      nbins = n)
+cross_df <- cross_df |>
+  mutate(
+    region_i = mx$region[i],
+    region_j = mx$region[j],
+    state_i = mx$state_code[i],
+    state_j = mx$state_code[j],
+    deg_total_i = deg_total[i],
+    deg_total_j = deg_total[j],
+    deg_total_max = pmax(deg_total_i, deg_total_j),
+    border_km = cross_shared_m / 1000)
+
+saveRDS(cross_df, "data/true_pairs_cross.rds")
+
 mun_df <- data.frame(
   region = mx$region,
   state_code = mx$state_code,
   deg = deg,
-  # per-municipio contribution to the k = 6 pair ceiling
+  deg_total = deg_total,
+  # per-municipio contribution to the k = 6 pair ceiling. NOTE this is a
+  # BUDGET, not a proven bound -- see ceiling_check; cells do achieve more than
+  # 6 same-state contacts in places.
   cap6 = pmin(deg, 6L))
 
 saveRDS(pairs_df, "data/true_pairs_meta.rds")
@@ -127,4 +174,8 @@ cat(sprintf("point-contact pairs (0 m shared border): %d\n",
             sum(pairs_df$border_km == 0)))
 cat(sprintf("cor(deg_max, log1p(border_km)) = %.3f\n",
             cor(pairs_df$deg_max, log1p(pairs_df$border_km))))
-cat("\nWrote data/true_pairs_meta.rds, data/true_mun_meta.rds\n")
+cat("\n-- cross-state --\n")
+cat(sprintf("pairs: %d | point-contact: %d | median shared border %.2f km\n",
+            nrow(cross_df), sum(cross_df$border_km == 0),
+            median(cross_df$border_km)))
+cat("\nWrote data/true_pairs_meta.rds, data/true_mun_meta.rds, data/true_pairs_cross.rds\n")
